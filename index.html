@@ -3,113 +3,142 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>胶片分镜条核对台</title>
+    <title>多厅巡演排产台</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <main class="shell">
       <header class="hero">
         <div>
-          <p class="eyebrow">纸质放映胶片整理</p>
-          <h1>胶片分镜条核对台</h1>
+          <p class="eyebrow">胶片核对台 · 巡演扩展</p>
+          <h1>多厅巡演排产台</h1>
+          <p class="subtitle">片段按画幅 / 声轨 / 设备 / 授权时段排入各影厅日期场次，锁定安排不可改动</p>
         </div>
         <div class="hero-stats">
-          <div>
-            <span>总时长</span>
-            <strong id="totalDuration">0:00</strong>
-          </div>
-          <div>
-            <span>破损片段</span>
-            <strong id="damageCount">0</strong>
-          </div>
-          <div>
-            <span>片段数</span>
-            <strong id="segmentCount">0</strong>
-          </div>
+          <div><span>已排片段</span><strong id="statPlaced">0</strong></div>
+          <div><span>必放未排</span><strong id="statMust">0</strong></div>
+          <div><span>冲突</span><strong id="statConflicts">0</strong></div>
+          <div><span>已锁定</span><strong id="statLocked">0</strong></div>
         </div>
       </header>
 
       <section class="toolbar">
-        <label>
-          胶片卷
-          <input id="reelTitle" type="text" placeholder="例：春日试映A卷" />
+        <label class="tb-field">
+          当前卷 / 巡演版本
+          <select id="reelSelect"></select>
         </label>
-        <label>
-          颜色偏移
-          <select id="colorFilter">
-            <option value="all">全部</option>
-            <option value="正常">正常</option>
-            <option value="偏红">偏红</option>
-            <option value="偏青">偏青</option>
-            <option value="偏黄">偏黄</option>
-            <option value="褪色">褪色</option>
-          </select>
-        </label>
-        <label>
-          搜索
-          <input id="searchInput" type="search" placeholder="片段编号或备注" />
-        </label>
-        <button id="exportBtn">导出清单</button>
+        <button id="copyTourBtn" title="把当前卷复制为新的巡演版本">复制为巡演版本</button>
+        <button id="newTourBtn">新建巡演卷</button>
+        <span class="tb-spacer"></span>
+        <button id="undoBtn" title="Ctrl+Z">↶ 撤销</button>
+        <button id="redoBtn" title="Ctrl+Shift+Z">↷ 重做</button>
+        <button id="autoBtn" class="primary">自动排程</button>
+        <button id="batchLockBtn">批量锁场</button>
+        <button id="compareBtn">方案对比</button>
+        <button id="importBtn">导入</button>
+        <button id="exportBtn">导出</button>
+        <input id="importFile" type="file" accept="application/json,.json" hidden />
+      </section>
+
+      <section id="batchBar" class="batch-bar" hidden>
+        <span>批量模式：勾选要锁定 / 解锁的场次</span>
+        <label class="inline-check"><input type="checkbox" id="batchAll" /> 全选场次</label>
+        <button id="batchApplyLock">锁定所选场次</button>
+        <button id="batchApplyUnlock">解锁所选场次</button>
+        <button id="batchExit">退出批量模式</button>
       </section>
 
       <section class="layout">
-        <aside class="panel">
-          <h2>录入片段</h2>
-          <form id="segmentForm" class="segment-form">
-            <label>
-              片段编号
-              <input id="codeInput" required placeholder="A-014" />
-            </label>
-            <label>
-              时长秒数
-              <input id="durationInput" required type="number" min="1" value="12" />
-            </label>
-            <label>
-              颜色偏移
-              <select id="shiftInput">
-                <option value="正常">正常</option>
-                <option value="偏红">偏红</option>
-                <option value="偏青">偏青</option>
-                <option value="偏黄">偏黄</option>
-                <option value="褪色">褪色</option>
-              </select>
-            </label>
-            <label>
-              破损情况
-              <select id="damageInput">
-                <option value="完好">完好</option>
-                <option value="轻微划痕">轻微划痕</option>
-                <option value="齿孔破损">齿孔破损</option>
-                <option value="接片松动">接片松动</option>
-                <option value="需跳过">需跳过</option>
-              </select>
-            </label>
-            <label>
-              缩略图
-              <input id="thumbInput" type="file" accept="image/*" />
-            </label>
-            <label>
-              备注
-              <textarea id="noteInput" rows="4" placeholder="试映前要留意的画面、接片或声音点"></textarea>
-            </label>
-            <button class="primary" type="submit">加入放映清单</button>
-          </form>
-        </aside>
-
-        <section class="panel list-panel">
+        <aside class="panel library-panel">
           <div class="panel-head">
-            <h2>放映顺序</h2>
-            <span>拖拽片段调整顺序</span>
+            <h2>素材库</h2>
+            <button id="toggleFormBtn" class="mini">＋ 录入片段</button>
+          </div>
+          <form id="segmentForm" class="segment-form" hidden>
+            <input type="hidden" id="editId" />
+            <div class="form-grid">
+              <label>编号<input id="codeInput" required placeholder="T-013" /></label>
+              <label>片名<input id="titleInput" placeholder="片段片名" /></label>
+              <label>时长(秒)<input id="durationInput" required type="number" min="1" step="1" value="600" /></label>
+              <label>画幅
+                <select id="aspectInput">
+                  <option>1.37</option><option selected>1.85</option><option>2.39</option><option>1.43</option>
+                </select>
+              </label>
+              <label>声轨
+                <select id="audioInput">
+                  <option>单声道</option><option selected>立体声</option><option>5.1环绕</option>
+                </select>
+              </label>
+              <label>优先级
+                <select id="priorityInput">
+                  <option value="1">1 最高</option><option value="2" selected>2</option>
+                  <option value="3">3</option><option value="4">4</option><option value="5">5</option>
+                </select>
+              </label>
+            </div>
+            <label>设备需求
+              <div id="equipmentInput" class="check-row"></div>
+            </label>
+            <div class="form-grid">
+              <label>同素材标识<input id="sourceInput" placeholder="相同素材互斥，如 M1" /></label>
+              <label>授权起<input id="licenseStartInput" type="date" /></label>
+              <label>授权止<input id="licenseEndInput" type="date" /></label>
+            </div>
+            <label class="inline-check"><input type="checkbox" id="mustInput" /> 必放片段</label>
+            <label>缩略图<input id="thumbInput" type="file" accept="image/*" /></label>
+            <label>备注<textarea id="noteInput" rows="2" placeholder="放映提示、接片、声画注意点"></textarea></label>
+            <div class="form-actions">
+              <button class="primary" type="submit" id="formSubmitBtn">加入巡演卷</button>
+              <button type="button" id="formCancelBtn">取消</button>
+            </div>
+          </form>
+          <div class="filter-row">
+            <input id="searchInput" type="search" placeholder="搜索编号 / 片名" />
+            <label class="inline-check"><input type="checkbox" id="mustOnlyFilter" /> 仅必放</label>
           </div>
           <div id="segmentList" class="segment-list"></div>
+        </aside>
+
+        <section class="panel grid-panel">
+          <div class="panel-head">
+            <h2>巡演场次网格</h2>
+            <span id="gridHint">拖拽片段卡片到场次，或点选片段后点场次</span>
+          </div>
+          <div id="scheduleGrid" class="schedule-grid"></div>
+          <div class="legend">
+            <span><i class="dot lock"></i>已锁定</span>
+            <span><i class="dot conflict"></i>含冲突</span>
+            <span><i class="dot must"></i>必放</span>
+            <span>同素材标识相同的片段同一天不得在两个影厅出现</span>
+          </div>
         </section>
 
-        <aside class="panel warning-panel">
-          <h2>试映前核对</h2>
-          <div id="warningList" class="warning-list"></div>
+        <aside class="panel side-panel">
+          <div class="panel-head"><h2>方案</h2></div>
+          <div class="plan-row">
+            <select id="planSelect"></select>
+            <button id="savePlanBtn" class="mini">另存为新方案</button>
+          </div>
+          <div id="planMeta" class="plan-meta"></div>
+          <div class="panel-head second"><h2>冲突清单</h2><button id="recheckBtn" class="mini">重新校验</button></div>
+          <div id="conflictList" class="conflict-list"></div>
         </aside>
       </section>
     </main>
+
+    <!-- 冲突 / 排程结果对话框 -->
+    <div id="modalOverlay" class="modal-overlay" hidden>
+      <div class="modal" role="dialog" aria-modal="true">
+        <div class="modal-head">
+          <h3 id="modalTitle">提示</h3>
+          <button id="modalCloseBtn" class="mini">×</button>
+        </div>
+        <div id="modalBody" class="modal-body"></div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
 
     <script src="app.js"></script>
   </body>

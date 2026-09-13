@@ -1,0 +1,22 @@
+{
+  "name": "tour-schedule-desk",
+  "version": "2.0.0",
+  "description": "多厅巡演排产台：胶片片段按画幅/声轨/设备/授权/同素材互斥排入影厅日期场次，支持拖拽、自动排程、锁定、撤销重做、方案对比与导入校验。",
+  "private": true,
+  "scripts": {
+    "serve": "python3 -m http.server 8137",
+    "test": "node e2e-test.js"
+  },
+  "keywords": [
+    "film",
+    "tour",
+    "scheduling",
+    "constraint"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "playwright": "^1.63.0"
+  }
+}
