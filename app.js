@@ -60,6 +60,25 @@ function todayISO(offset = 0) {
   return d.toISOString().slice(0, 10);
 }
 
+/* 严格真实日历日期：必须是 YYYY-MM-DD 且月日真实存在（拒绝 2026-02-30、13 月等） */
+function isValidCalendarDate(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [y, m, d] = value.split("-").map(Number);
+  if (m < 1 || m > 12 || d < 1) return false;
+  const dim = new Date(y, m, 0).getDate(); // 该月真实天数（Date 自动按闰年计算 2 月）
+  return d <= dim;
+}
+/* 合法二十四小时时刻：HH:MM，时 00–23、分 00–59（拒绝 25:70） */
+function isValidClockTime(value) {
+  if (typeof value !== "string" || !/^\d{2}:\d{2}$/.test(value)) return false;
+  const [h, mi] = value.split(":").map(Number);
+  return h >= 0 && h <= 23 && mi >= 0 && mi <= 59;
+}
+/* 编号归一化：去全部空白、忽略大小写，用于同卷唯一性判定 */
+function normalizeCode(code) {
+  return String(code ?? "").replace(/\s+/g, "").toLowerCase();
+}
+
 /* ----------------------------- 默认数据 ----------------------------- */
 
 function makeDefaultReels() {
@@ -949,8 +968,9 @@ async function submitSegment(e) {
   if (!code) return toast("编号不能为空", "error");
   if (!Number.isFinite(duration) || duration <= 0) return toast("时长必须为正数", "error");
   // 编号重复拦截（同卷）
-  const dup = reel.segments.find((s) => s.code === code && s.id !== els.editId.value);
-  if (dup) return toast(`编号 ${code} 已存在（${dup.title || ""}），请改用其他编号`, "error");
+  const newNorm = normalizeCode(code);
+  const dup = reel.segments.find((s) => s.id !== els.editId.value && normalizeCode(s.code) === newNorm);
+  if (dup) return toast(`编号 ${code} 与已有「${dup.code}」重复（忽略大小写与空格），请改用其他编号`, "error");
   const licenseStart = els.licenseStartInput.value;
   const licenseEnd = els.licenseEndInput.value;
   if (licenseStart && licenseEnd && licenseStart > licenseEnd) {
@@ -1169,31 +1189,42 @@ function validateImport(payload) {
     if (!Array.isArray(r.segments) || !Array.isArray(r.shows) || !Array.isArray(r.halls)) {
       errors.push(`${tag}：缺少 segments/shows/halls，已丢弃`); return;
     }
-    const codes = new Set();
+    const codeByNorm = new Map(); // normalizeCode -> 原始（trim 后）编号
     const segs = [];
     r.segments.forEach((s, si) => {
       const stag = `${tag} 片段#${si + 1}`;
       if (!s || typeof s !== "object") { errors.push(`${stag}：不是对象，已跳过`); return; }
-      if (!s.code || typeof s.code !== "string") { errors.push(`${stag}：缺少编号，已跳过`); return; }
-      if (codes.has(s.code)) { errors.push(`${stag}：重复编号「${s.code}」，已跳过`); return; }
-      const dur = Number(s.duration);
-      if (!Number.isFinite(dur) || dur <= 0) { errors.push(`${stag}「${s.code}」：时长非法，已跳过`); return; }
-      if (s.licenseStart && s.licenseEnd && s.licenseStart > s.licenseEnd) {
-        errors.push(`${stag}「${s.code}」：授权时段非法（起>止），已跳过`); return;
+      if (typeof s.code !== "string") { errors.push(`${stag}：缺少编号，已跳过`); return; }
+      const rawCode = s.code;
+      const code = rawCode.trim();
+      const norm = normalizeCode(code);
+      if (!norm) { errors.push(`${stag}：编号为空白，已跳过（原值 ${JSON.stringify(rawCode)}）`); return; }
+      if (codeByNorm.has(norm)) {
+        errors.push(`${stag}：重复编号「${code}」与同卷「${codeByNorm.get(norm)}」（忽略大小写与空格后相同），已跳过`);
+        return;
       }
-      if (s.licenseStart && !/^\d{4}-\d{2}-\d{2}$/.test(s.licenseStart)) { errors.push(`${stag}「${s.code}」：授权起日期格式非法，已跳过`); return; }
-      if (s.licenseEnd && !/^\d{4}-\d{2}-\d{2}$/.test(s.licenseEnd)) { errors.push(`${stag}「${s.code}」：授权止日期格式非法，已跳过`); return; }
+      const dur = Number(s.duration);
+      if (!Number.isFinite(dur) || dur <= 0) { errors.push(`${stag}「${code}」：时长非法，已跳过`); return; }
+      if (s.licenseStart && s.licenseEnd && s.licenseStart > s.licenseEnd) {
+        errors.push(`${stag}「${code}」：授权时段非法（起>止），已跳过`); return;
+      }
+      if (s.licenseStart && !isValidCalendarDate(s.licenseStart)) {
+        errors.push(`${stag}「${code}」：授权起日期「${s.licenseStart}」不是真实日历日期，已跳过`); return;
+      }
+      if (s.licenseEnd && !isValidCalendarDate(s.licenseEnd)) {
+        errors.push(`${stag}「${code}」：授权止日期「${s.licenseEnd}」不是真实日历日期，已跳过`); return;
+      }
       // 伪装缩略图：声明 data:image 但真实文件头不是图片
       if (s.thumb) {
-        if (typeof s.thumb !== "string") { errors.push(`${stag}「${s.code}」：缩略图字段非法，已跳过`); return; }
+        if (typeof s.thumb !== "string") { errors.push(`${stag}「${code}」：缩略图字段非法，已跳过`); return; }
         if (!dataUrlIsRealImage(s.thumb)) {
-          errors.push(`${stag}「${s.code}」：缩略图文件头与图片声明不符（伪装缩略图），已清除该字段`);
+          errors.push(`${stag}「${code}」：缩略图文件头与图片声明不符（伪装缩略图），已清除该字段`);
           s.thumb = "";
         }
       }
-      codes.add(s.code);
+      codeByNorm.set(norm, code);
       segs.push({
-        id: uid("seg"), code: s.code, title: String(s.title || ""), duration: dur,
+        id: uid("seg"), code, title: String(s.title || ""), duration: dur,
         aspect: ASPECTS.includes(s.aspect) ? s.aspect : "1.85",
         audio: AUDIOS.includes(s.audio) ? s.audio : "立体声",
         priority: Math.min(5, Math.max(1, Number(s.priority) || 3)),
@@ -1204,22 +1235,34 @@ function validateImport(payload) {
       });
     });
 
-    // 影厅 / 场次清洗
-    const halls = r.halls.filter((h) => h && h.id && h.name).map((h) => ({
-      id: uid("h"), name: String(h.name), capacity: Number(h.capacity) || 100,
-      aspect: ASPECTS.includes(h.aspect) ? h.aspect : "1.85",
-      audio: AUDIOS.includes(h.audio) ? h.audio : "立体声",
-      equipment: Array.isArray(h.equipment) ? h.equipment.filter((e) => EQUIPMENT.includes(e)) : [],
-      turnMinutes: Math.max(0, Number(h.turnMinutes) || 0)
-    }));
+    // 影厅 / 场次清洗（保留原始顺序构建映射，避免 filter 后索引错位）
+    const halls = [];
     const hallIdMap = new Map();
-    r.halls.forEach((oh, i) => { if (oh && oh.id) hallIdMap.set(oh.id, halls[i]?.id); });
+    r.halls.forEach((oh) => {
+      if (oh && oh.id && oh.name) {
+        const nh = {
+          id: uid("h"), name: String(oh.name), capacity: Number(oh.capacity) || 100,
+          aspect: ASPECTS.includes(oh.aspect) ? oh.aspect : "1.85",
+          audio: AUDIOS.includes(oh.audio) ? oh.audio : "立体声",
+          equipment: Array.isArray(oh.equipment) ? oh.equipment.filter((e) => EQUIPMENT.includes(e)) : [],
+          turnMinutes: Math.max(0, Number(oh.turnMinutes) || 0)
+        };
+        halls.push(nh);
+        hallIdMap.set(oh.id, nh.id);
+      }
+    });
     const shows = [];
     r.shows.forEach((sh) => {
       if (!sh || !hallIdMap.has(sh.hallId)) return;
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(sh.date)) { errors.push(`${tag}：场次日期「${sh.date}」非法，已跳过`); return; }
-      if (!/^\d{2}:\d{2}$/.test(sh.start) || !/^\d{2}:\d{2}$/.test(sh.end) || hmToMinutes(sh.end) <= hmToMinutes(sh.start)) {
-        errors.push(`${tag}：场次时段 ${sh.start}-${sh.end} 非法，已跳过`); return;
+      if (!isValidCalendarDate(sh.date)) {
+        errors.push(`${tag}：场次日期「${sh.date}」不是真实日历日期，已跳过`); return;
+      }
+      const stOk = isValidClockTime(sh.start), enOk = isValidClockTime(sh.end);
+      if (!stOk || !enOk) {
+        errors.push(`${tag}：场次时刻非法（${sh.start}–${sh.end}，须为 00:00–23:59），已跳过`); return;
+      }
+      if (hmToMinutes(sh.end) <= hmToMinutes(sh.start)) {
+        errors.push(`${tag}：场次时段 ${sh.start}-${sh.end} 结束不晚于开始，已跳过`); return;
       }
       shows.push({ id: uid("s"), hallId: hallIdMap.get(sh.hallId), date: sh.date, start: sh.start, end: sh.end });
     });

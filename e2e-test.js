@@ -320,7 +320,7 @@ async function dispatchDrag(page, fromSel, toSel) {
     await page.click("#batchExit").catch(() => {});
   }
 
-  /* ---------- 12. 导入异常：重复编号 / 非法时段 / 伪装缩略图 ---------- */
+  /* ---------- 12. 导入异常：重复编号 / 非法时段 / 伪装缩略图 / 空白编号 / 非法日历时刻 ---------- */
   console.log("\n[12] 导入异常拦截");
   {
     const validHall = { id: "hh1", name: "导入厅", capacity: 100, aspect: "1.85", audio: "立体声", equipment: ["数字机"], turnMinutes: 15 };
@@ -329,32 +329,94 @@ async function dispatchDrag(page, fromSel, toSel) {
     // 伪装缩略图：声明 image/png，实际是文本字节（EF BB BF + "test"）
     const fakePng = "data:image/png;base64," + Buffer.from([0xef, 0xbb, 0xbf]).toString("base64") + Buffer.from("test").toString("base64");
     const payload = {
-      reels: [{
-        name: "异常导入卷", halls: [validHall], shows: [validShow], segments: [
-          good("X-1"),
-          good("X-1"),                                   // 重复编号
-          good("X-2", { duration: -50 }),                // 非法时长
-          good("X-3", { thumb: fakePng }),               // 伪装缩略图（字段应被清除，片段保留）
-          good("X-4", { licenseStart: "2026-01-10", licenseEnd: "2026-01-01" }) // 非法授权时段
-        ]
-      }]
+      reels: [
+        {
+          name: "异常导入卷", halls: [validHall], shows: [validShow], segments: [
+            good("X-1"),
+            good("X-1"),                                   // 完全重复编号
+            good("x-1"),                                   // 仅大小写不同
+            good(" X- 1 "),                                // 仅空格差异（去空格、忽略大小写后相同）
+            good("   "),                                   // 空白编号
+            good("X-2", { duration: -50 }),                // 非法时长
+            good("X-3", { thumb: fakePng }),               // 伪装缩略图（字段应被清除，片段保留）
+            good("X-4", { licenseStart: "2026-01-10", licenseEnd: "2026-01-01" }), // 授权起>止
+            good("X-5", { licenseStart: "2026-02-30" }),   // 不存在的日历日期
+            good("X-6")                                    // 正常
+          ]
+        },
+        {
+          name: "非法场次卷",
+          halls: [{ id: "g1", name: "场次厅", aspect: "1.85", audio: "立体声", equipment: ["数字机"] }],
+          shows: [
+            { id: "g1s1", hallId: "g1", date: "2026-02-30", start: "14:00", end: "16:00" }, // 假日期
+            { id: "g1s2", hallId: "g1", date: "2026-01-06", start: "25:70", end: "28:00" }, // 非法时刻
+            { id: "g1s3", hallId: "g1", date: "2026-01-07", start: "10:00", end: "09:00" }  // 结束早于开始
+          ],
+          segments: [good("G-1")]
+        }
+      ]
     };
     await page.setInputFiles("#importFile", { name: "bad.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(payload)) });
     await page.waitForSelector("#modalOverlay:not([hidden])");
     const txt = await modalText();
     check("导入预览列出拦截项", txt.includes("已拦截"));
-    check("拦截重复编号", txt.includes("重复编号"));
+    check("拦截完全重复编号", txt.includes("重复编号"));
+    check("拦截仅大小写不同的编号", txt.includes("x-1") && txt.includes("忽略大小写"));
+    check("拦截仅空格不同的编号", txt.includes("X- 1"));
+    check("拦截空白编号", txt.includes("编号为空白"));
     check("拦截非法时长", txt.includes("时长非法"));
-    check("拦截非法授权时段", txt.includes("授权时段非法"));
+    check("拦截授权起>止", txt.includes("授权时段非法"));
+    check("拦截不存在的授权日期 2026-02-30", txt.includes("不是真实日历日期"));
     check("拦截伪装缩略图", txt.includes("伪装缩略图"));
+    check("拦截场次假日期", txt.includes("场次日期「2026-02-30」"));
+    check("拦截非法时刻 25:70", txt.includes("25:70") && txt.includes("场次时刻非法"));
+    check("拦截结束早于开始", txt.includes("结束不晚于开始"));
+    // 预览仍列出有效卷（错误项被剔除但整卷仍可导入）
+    check("预览仍可导入 1 个有效卷", txt.includes("确认导入 1 卷"));
     await page.click("#importConfirmBtn");
     await sleep(80);
     await closeModal();
     const { s } = await meta();
     const imp = s.reels.find((r) => r.name === "异常导入卷");
-    check("合法片段仍进入页面（X-1 与 X-3，共 2 段）", imp && imp.segments.length === 2, imp ? String(imp.segments.map((x) => x.code)) : "卷未导入");
+    // 有效：X-1、X-3、X-6（其余重复/空白/非法均被跳过）
+    check("合法片段进入页面（X-1、X-3、X-6，共 3 段）", imp && imp.segments.length === 3, imp ? String(imp.segments.map((x) => x.code)) : "卷未导入");
+    check("大小写/空格变体未混入", imp && imp.segments.every((x) => ["X-1", "X-3", "X-6"].includes(x.code)));
+    check("空白编号未进入", imp && !imp.segments.some((x) => !x.code.trim()));
     const x3 = imp?.segments.find((x) => x.code === "X-3");
     check("X-3 伪装缩略图被清空", x3 && !x3.thumb);
+    // 非法场次卷：所有场次被拒 → 整卷丢弃，绝不进入页面
+    const badShowReel = s.reels.find((r) => r.name === "非法场次卷");
+    check("无有效场次的卷整体不进入页面", !badShowReel);
+  }
+
+  /* ---------- 12b. 完全正常的导入（无异常，可预览并导入） ---------- */
+  console.log("\n[12b] 正常导入");
+  {
+    const clean = {
+      reels: [{
+        name: "干净导入卷",
+        halls: [{ id: "c1", name: "干净厅", aspect: "2.39", audio: "5.1环绕", equipment: ["数字机", "杜比处理器", "宽银幕镜头"] }],
+        shows: [
+          { id: "c1s1", hallId: "c1", date: "2026-03-01", start: "13:00", end: "15:30" },
+          { id: "c1s2", hallId: "c1", date: "2026-02-28", start: "19:00", end: "21:00" } // 2026 非闰年，28 合法
+        ],
+        segments: [
+          { code: "C-10", duration: 900, aspect: "2.39", audio: "5.1环绕", equipment: ["数字机", "杜比处理器"], licenseStart: "2026-02-01", licenseEnd: "2026-03-31" },
+          { code: "C-20", duration: 720, aspect: "2.39", audio: "5.1环绕", equipment: ["宽银幕镜头"] }
+        ]
+      }]
+    };
+    await page.setInputFiles("#importFile", { name: "clean.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(clean)) });
+    await page.waitForSelector("#modalOverlay:not([hidden])");
+    const txt = await modalText();
+    check("干净数据提示无异常", txt.includes("校验全部通过"));
+    await page.click("#importConfirmBtn");
+    await sleep(80);
+    const { s } = await meta();
+    const reel = s.reels.find((r) => r.name === "干净导入卷");
+    check("干净卷 2 片段全部进入", reel && reel.segments.length === 2, String(reel?.segments.length));
+    check("干净卷 2 场次全部进入", reel && reel.shows.length === 2, String(reel?.shows.length));
+    check("合法闰年边界 2026-02-28 场次保留", reel && reel.shows.some((sh) => sh.date === "2026-02-28"));
   }
 
   /* ---------- 13. 导入畸形 JSON / 结构性异常，绝不进入页面 ---------- */
